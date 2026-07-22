@@ -36,18 +36,43 @@ Copy Cat follows a modular, decoupled architecture where text acquisition, docum
             |
             v
 +-----------------------+
-|     TTS Provider      |  (edge-tts -> MP3/WAV Audio Chunks)
+|     TTS Provider      |  (edge-tts -> MP3 Audio Chunks)
 +-----------------------+
             |
             v
 +-----------------------+
-|   Audio Output Queue  |  (Bounded buffer -> QtMultimedia QMediaPlayer)
+|   Audio Output Queue  |  (In-Memory QBuffer -> PySide6 QtMultimedia)
 +-----------------------+
             |
             v
 +-----------------------+
 |    PySide6 GUI / UI   |  (Highlighting, controls, progress, tray)
 +-----------------------+
+```
+
+### Layered Architecture & Component Isolation
+```mermaid
+graph TD
+    subgraph Presentation Layer [PySide6 GUI Layer - UI Widgets]
+        UI[MainWindow / PlaybackControls]
+    end
+
+    subgraph Application Layer [Service & Concurrency Layer]
+        Controller[MainController / State Machine]
+        AsyncLoop[qasync QEventLoop / asyncio Tasks]
+        AudioService[QtAudioOutput - QMediaPlayer & QAudioOutput]
+    end
+
+    subgraph Domain Layer [Pure Python Core Domain - Zero Qt Dependencies]
+        Models[SourceSnapshot / ReadableDocument / AudioChunk]
+        Protocols[SpeechProvider / AudioOutput / TextSource Protocols]
+    end
+
+    UI -->|Emits UI Intent Signals| Controller
+    Controller -->|Invokes Protocol Interfaces| AsyncLoop
+    AsyncLoop -->|Emits Controller Signals| Controller
+    Controller -->|Updates UI State| UI
+    AudioService -->|Implements| Protocols
 ```
 
 ---
@@ -211,17 +236,16 @@ The session uses an explicit deterministic finite state machine (FSM).
 ```
 
 ### Error States
-- `CAPTURE_FAILED`: Empty clipboard or failed accessibility read.
+- `CAPTURE_FAILED`: Empty text input, whitespace-only, or missing accessibility selection.
 - `PARSE_FAILED`: Document parsing exception.
-- `SYNTHESIS_FAILED`: Network error, Edge TTS timeout, or invalid voice key.
-- `AUDIO_OUTPUT_FAILED`: QtMultimedia player error or missing audio device.
+- `SYNTHESIS_FAILED`: Network error, Edge TTS timeout, or Bing endpoint rate limit.
+- `AUDIO_OUTPUT_FAILED`: QtMultimedia player error or missing sound device.
 
 ---
 
-## 5. Producer-Consumer Pipeline & Queueing
+## 5. Audio Output & In-Memory `QBuffer` Strategy
 
-To eliminate long startup latency while preventing over-fetching:
-- **Speech Planner** converts `DocumentBlock` objects into speech requests.
-- **Bounded Buffer**: Prefetches only 1–2 upcoming blocks into an ordered queue.
-- **Immediate Stop/Skip Cancellation**: When Stop or Skip Next/Prev is invoked, pending network tasks in the synthesis queue are immediately cancelled, and buffered audio chunks are purged.
-- **Audio Output**: `PySide6.QtMultimedia.QMediaPlayer` streams audio chunks sequentially, emitting signals on chunk completion to trigger visual highlight updates and continuous playback of the next queued chunk.
+To eliminate Windows temporary file locking bugs (`WinError 32: PermissionError`) and disk cleanup leaks:
+- **In-Memory Streaming**: Synthesized MP3 bytes are converted to `PySide6.QtCore.QByteArray` and wrapped in `PySide6.QtCore.QBuffer` opened in `QIODevice.ReadOnly`.
+- **Reference Pinning**: `QtAudioOutput` retains strong Python instance references to active `(QByteArray, QBuffer)` pairs during playback to prevent premature garbage collection native access violations.
+- **Request Generation Guards**: Every synthesis request carries a unique `request_id`. When Stop or Skip is invoked, active request IDs are invalidated, preventing stale network callbacks from accidentally triggering playback after a user cancels.
