@@ -2,9 +2,34 @@ import pytest
 import asyncio
 from PySide6.QtWidgets import QApplication
 from copycat.controller.main_controller import MainController
-from copycat.domain.models import PlaybackState
+from copycat.domain.models import PlaybackState, BlockType, DocumentBlock
 from tests.mocks.mock_speech_provider import MockSpeechProvider
 from tests.mocks.mock_audio_output import MockAudioOutput
+from tests.mocks.mock_ollama import MockOllamaTransport
+from copycat.services.ollama_transformer import OllamaTransformer
+
+@pytest.mark.asyncio
+async def test_controller_ai_mode_transformation_flow(event_loop):
+    speech = MockSpeechProvider(delay=0.0)
+    audio = MockAudioOutput()
+    transport = MockOllamaTransport(response_text="Python add function description.")
+    transformer = OllamaTransformer(transport=transport)
+    controller = MainController(speech_provider=speech, audio_output=audio, transformer=transformer)
+
+    transform_signals = []
+    controller.transforming_block.connect(transform_signals.append)
+
+    raw_text = "```python\ndef add(a, b):\n    return a + b\n```"
+    await controller.read_text(raw_text, ai_mode="code_summary")
+
+    assert controller.state == PlaybackState.PLAYING
+    assert audio.is_playing is True
+    assert len(transform_signals) == 1
+    assert transform_signals[0] == 1
+
+    # Speech provider should have received AI summary request text
+    assert len(speech.calls) == 1
+    assert "AI summary: Python add function description." in speech.calls[0].text
 
 @pytest.mark.asyncio
 async def test_controller_continuous_multi_block_reading(event_loop):

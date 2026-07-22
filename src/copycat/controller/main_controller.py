@@ -12,21 +12,25 @@ from copycat.domain.models import (
     ReadingSession,
     SpeechRequest,
     AudioChunk,
+    ReadingPolicy,
 )
 from copycat.protocols.speech import SpeechProvider
 from copycat.protocols.audio import AudioOutput
+from copycat.protocols.transformer import DocumentTransformer
 from copycat.parsing.parser import MarkdownDocumentParser
 from copycat.speech.planner import SpeechPlanner
 from copycat.sources.clipboard import ClipboardSource
 from copycat.services.prefetch_queue import BoundedPrefetchQueue
+from copycat.services.ollama_transformer import OllamaTransformer
 
 class MainController(QObject):
-    """Orchestrates playback state machine, ReadingSession, pre-fetch queue, and navigation controls."""
+    """Orchestrates playback state machine, ReadingSession, pre-fetch queue, AI DocumentTransformer, and navigation."""
     state_changed = Signal(object)  # Emits PlaybackState enum
     status_message_changed = Signal(str)
     error_occurred = Signal(str)
-    block_changed = Signal(int, int, object)  # current_block_1index, total_blocks, DocumentBlock
+    block_changed = Signal(int, int, object)  # current_block_1idx, total_blocks, DocumentBlock
     boundary_reached = Signal(str)  # "start" or "end"
+    transforming_block = Signal(int)  # block_1idx being transformed by Ollama
 
     def __init__(
         self,
@@ -34,6 +38,7 @@ class MainController(QObject):
         audio_output: AudioOutput,
         parser: Optional[MarkdownDocumentParser] = None,
         planner: Optional[SpeechPlanner] = None,
+        transformer: Optional[DocumentTransformer] = None,
         clipboard_source: Optional[ClipboardSource] = None,
         prefetch_queue: Optional[BoundedPrefetchQueue] = None,
         parent: Optional[QObject] = None,
@@ -43,13 +48,21 @@ class MainController(QObject):
         self.audio_output = audio_output
         self.parser = parser or MarkdownDocumentParser()
         self.planner = planner or SpeechPlanner()
+        self.transformer = transformer or OllamaTransformer()
         self.clipboard_source = clipboard_source
-        self.prefetch_queue = prefetch_queue or BoundedPrefetchQueue(self.speech_provider, capacity=2)
         
+        self.prefetch_queue = prefetch_queue or BoundedPrefetchQueue(
+            speech_provider=self.speech_provider,
+            planner=self.planner,
+            transformer=self.transformer,
+            capacity=10,
+        )
+
         self.state = PlaybackState.IDLE
         self.session: Optional[ReadingSession] = None
         self.voice: str = "en-US-JennyNeural"
         self.rate: str = "+0%"
+        self.ai_mode: str = "off"
 
         self._active_request_id: Optional[str] = None
         self._current_task: Optional[asyncio.Task] = None
@@ -74,7 +87,7 @@ class MainController(QObject):
     async def _on_playback_finished(self) -> None:
         if self.state == PlaybackState.PLAYING and self.session:
             if self.session.can_skip_next():
-                self.session.skip_next()
+                self.session.advance_next()
                 await self._play_current_session_block()
             else:
                 self._set_state(PlaybackState.IDLE, "Finished reading document")
@@ -84,7 +97,7 @@ class MainController(QObject):
         self._set_state(PlaybackState.AUDIO_OUTPUT_FAILED, f"Audio error: {error_msg}")
         self.error_occurred.emit(error_msg)
 
-    async def read_clipboard(self, voice: str = "en-US-JennyNeural", rate: str = "+0%") -> None:
+    async def read_clipboard(self, voice: str = "en-US-JennyNeural", rate: str = "+0%", ai_mode: str = "off") -> None:
         if not self.clipboard_source:
             self.clipboard_source = ClipboardSource(self)
 
@@ -96,9 +109,15 @@ class MainController(QObject):
             self.error_occurred.emit(str(err))
             return
 
-        await self.read_text(snapshot.raw_text, voice=voice, rate=rate)
+        await self.read_text(snapshot.raw_text, voice=voice, rate=rate, ai_mode=ai_mode)
 
-    async def read_text(self, raw_text: str, voice: str = "en-US-JennyNeural", rate: str = "+0%") -> None:
+    async def read_text(
+        self,
+        raw_text: str,
+        voice: str = "en-US-JennyNeural",
+        rate: str = "+0%",
+        ai_mode: str = "off",
+    ) -> None:
         if not raw_text or not raw_text.strip():
             self._set_state(PlaybackState.CAPTURE_FAILED, "Input text cannot be empty.")
             return
@@ -107,6 +126,18 @@ class MainController(QObject):
 
         self.voice = voice
         self.rate = rate
+        self.ai_mode = ai_mode
+        self.planner.policy.ai_mode = ai_mode
+
+        if ai_mode == "document_summary" and self.transformer:
+            self._set_state(PlaybackState.PARSING, "🟡 Ollama: Generating full document summary (this may take a while)...")
+            summary = await self.transformer.summarize_document(raw_text)
+            if summary:
+                raw_text = summary
+            else:
+                self._set_state(PlaybackState.PARSE_FAILED, "Failed to generate document summary.")
+                self.error_occurred.emit("Ollama failed to generate document summary.")
+                return
 
         self._set_state(PlaybackState.PARSING, "Parsing document...")
         snapshot = SourceSnapshot(raw_text=raw_text)
@@ -121,7 +152,8 @@ class MainController(QObject):
             self._set_state(PlaybackState.IDLE, "No speakable content found.")
             return
 
-        self.session = ReadingSession(document=doc)
+        policy = ReadingPolicy(ai_mode=ai_mode)
+        self.session = ReadingSession(document=doc, policy=policy)
         self.prefetch_queue.set_generation(self.session.generation)
 
         await self._play_current_session_block()
@@ -141,12 +173,20 @@ class MainController(QObject):
         request_id = str(uuid.uuid4())
         self._active_request_id = request_id
 
-        # Format speakable text adhering to policy
-        spoken_text = self.planner.format_block_text(block)
+        # Emit transforming status if AI mode active
+        if self.ai_mode != "off":
+            self.transforming_block.emit(current_idx + 1)
+            msg = f"Asking Ollama to summarize block {current_idx + 1} of {total}..."
+        else:
+            msg = f"Reading block {current_idx + 1} of {total}..."
+
+        self._set_state(PlaybackState.BUFFERING, msg)
+
+        # Stage 1: Async plan & AI transformation
+        spoken_text = await self.planner.plan_block_async(block, self.transformer)
         if not spoken_text or not spoken_text.strip():
-            # Automatically skip non-speakable blocks
             if self.session.can_skip_next():
-                self.session.skip_next()
+                self.session.advance_next()
                 await self._play_current_session_block()
             else:
                 self._set_state(PlaybackState.IDLE, "Finished reading document")
@@ -160,10 +200,7 @@ class MainController(QObject):
             block_id=block.block_id,
         )
 
-        msg = f"Reading block {current_idx + 1} of {total}..."
-        self._set_state(PlaybackState.BUFFERING, msg)
-
-        # Retrieve chunk from pre-fetch queue or synthesize immediately
+        # Stage 2: Retrieve audio chunk from pre-fetch queue or synthesize
         try:
             self._current_task = asyncio.create_task(self.prefetch_queue.get_chunk(req, current_gen))
             chunk: AudioChunk = await self._current_task
@@ -173,8 +210,14 @@ class MainController(QObject):
             return
         except Exception as err:
             if self.session and self.session.generation == current_gen:
-                self._set_state(PlaybackState.SYNTHESIS_FAILED, f"Network error: {err}")
-                self.error_occurred.emit(str(err))
+                self.error_occurred.emit(f"Block {current_idx + 1} synthesis failed: {err}")
+                if self.session.can_skip_next():
+                    self.status_message_changed.emit(f"Skipping block {current_idx + 1} due to network timeout...")
+                    await asyncio.sleep(0.5)
+                    self.session.advance_next()
+                    await self._play_current_session_block()
+                else:
+                    self._set_state(PlaybackState.SYNTHESIS_FAILED, f"Network error: {err}")
             return
 
         if not self.session or self.session.generation != current_gen:
@@ -188,19 +231,15 @@ class MainController(QObject):
             self.error_occurred.emit(str(err))
             return
 
-        # Trigger background pre-fetch for upcoming block (index + 1)
-        if self.session.can_skip_next():
-            next_block = self.session.document.blocks[current_idx + 1]
-            next_text = self.planner.format_block_text(next_block)
-            if next_text and next_text.strip():
-                next_req = SpeechRequest(
-                    request_id=str(uuid.uuid4()),
-                    text=next_text,
-                    voice=self.voice,
-                    rate=self.rate,
-                    block_id=next_block.block_id,
+        # Trigger Dual-Stage background pre-fetch for upcoming blocks (Eager Deep Lookahead)
+        for offset in range(1, self.prefetch_queue.capacity):
+            if current_idx + offset < total:
+                next_block = self.session.document.blocks[current_idx + offset]
+                asyncio.create_task(
+                    self.prefetch_queue.prefetch_block(
+                        next_block, voice=self.voice, rate=self.rate, generation=current_gen
+                    )
                 )
-                asyncio.create_task(self.prefetch_queue.prefetch(next_req, current_gen))
 
     @qasync.asyncSlot()
     async def skip_next(self) -> None:

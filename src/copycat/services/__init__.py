@@ -3,6 +3,7 @@ from copycat.services.edge_tts_provider import EdgeTTSSpeechProvider
 from copycat.services.qt_audio_output import QtAudioPlayerService
 from copycat.services.settings_service import SettingsService, UserSettings
 from copycat.services.prefetch_queue import BoundedPrefetchQueue
+from copycat.services.ollama_transformer import OllamaTransformer
 
 __all__ = [
     "normalize_text",
@@ -11,4 +12,5 @@ __all__ = [
     "SettingsService",
     "UserSettings",
     "BoundedPrefetchQueue",
+    "OllamaTransformer",
 ]

@@ -9,15 +9,32 @@ from copycat.domain.models import (
     ReadingPolicy,
 )
 from copycat.services.speech_normalizer import normalize_text
+from copycat.protocols.transformer import DocumentTransformer
 
 class SpeechPlanner:
-    """Converts DocumentBlock AST items into speakable SpeechRequests adhering to ReadingPolicy."""
+    """Converts DocumentBlock AST items into speakable SpeechRequests adhering to ReadingPolicy and optional AI DocumentTransformer."""
 
     def __init__(self, policy: Optional[ReadingPolicy] = None):
         self.policy = policy or ReadingPolicy()
 
+    async def plan_block_async(
+        self,
+        block: DocumentBlock,
+        transformer: Optional[DocumentTransformer] = None,
+    ) -> str:
+        """Asynchronously formats a block, attempting AI transformation if configured, otherwise falling back to deterministic reading."""
+        if transformer and self.policy.ai_mode and self.policy.ai_mode != "off":
+            try:
+                ai_summary = await transformer.transform_block(block, mode=self.policy.ai_mode)
+                if ai_summary and ai_summary.strip():
+                    return normalize_text(ai_summary)
+            except Exception:
+                pass  # Fallback to deterministic reading
+
+        return self.format_block_text(block)
+
     def format_block_text(self, block: DocumentBlock) -> str:
-        """Applies reading policy rules to a single DocumentBlock."""
+        """Applies deterministic reading policy rules to a single DocumentBlock."""
         if block.block_type == BlockType.CODE:
             return self._format_code_block(block)
         elif block.block_type == BlockType.HEADING:
@@ -47,7 +64,6 @@ class SpeechPlanner:
 
     def _format_links_in_text(self, text: str) -> str:
         if self.policy.link_mode == "text_only" or self.policy.link_mode == "text_only_clean":
-            # Replace [Text](url) with Text
             return re.sub(r'\[([^\]]+)\]\((?:https?://\S+|[^)]+)\)', r'\1', text)
         elif self.policy.link_mode == "text_with_announcement":
             return re.sub(r'\[([^\]]+)\]\((?:https?://\S+|[^)]+)\)', r'\1, link omitted', text)

@@ -44,8 +44,13 @@ class QtAudioPlayerService(QObject):
         self._active_buffer.seek(0)
         self.player.setSourceDevice(self._active_buffer)
         self.audio_output.setVolume(self._target_volume)
-        self._is_changing_source = False
+        
+        # Re-arm changing source flag shortly after starting play to absorb queued Qt signals
         self.player.play()
+        QTimer.singleShot(100, self._clear_changing_source)
+
+    def _clear_changing_source(self) -> None:
+        self._is_changing_source = False
 
     def pause(self) -> None:
         """Pauses audio with a smooth 20ms volume fade to prevent audio popping."""
@@ -59,6 +64,7 @@ class QtAudioPlayerService(QObject):
         self.audio_output.setVolume(self._target_volume)
 
     def stop(self) -> None:
+        self._is_changing_source = True
         self.player.stop()
         self.player.setSourceDevice(None)
         if self._active_buffer:
@@ -69,7 +75,10 @@ class QtAudioPlayerService(QObject):
     @Slot(QMediaPlayer.MediaStatus)
     def _on_media_status_changed(self, status: QMediaPlayer.MediaStatus) -> None:
         if status == QMediaPlayer.MediaStatus.EndOfMedia and not self._is_changing_source:
-            self.playback_finished.emit()
+            pos = self.player.position()
+            # Position check filters out spurious EndOfMedia signals generated during source reset
+            if not isinstance(pos, int) or pos > 0:
+                self.playback_finished.emit()
 
     @Slot(QMediaPlayer.Error, str)
     def _on_error_occurred(self, error: QMediaPlayer.Error, error_string: str) -> None:

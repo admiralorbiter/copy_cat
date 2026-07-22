@@ -36,6 +36,11 @@ class ReadingPolicy:
     table_mode: str = "summary"
     announce_heading_levels: bool = False
     repeat_context_on_resume: bool = True
+    # Phase 3.5 AI Transformation Settings
+    ai_mode: str = "off"                  # "off", "code_summary", "data_summary", "gist"
+    ollama_host: str = "http://localhost:11434"
+    ollama_model: str = "gemma3:12b"
+    ollama_timeout: float = 3.0           # 3.0s SLA timeout circuit breaker
 
 @dataclass(frozen=True)
 class SourceSnapshot:
@@ -88,7 +93,7 @@ class AudioChunk:
     block_id: str = "block-0"
 
 class ReadingSession:
-    """Encapsulates document state, semantic reading cursor, and generation token for Phase 2."""
+    """Encapsulates document state, semantic reading cursor, and generation token for Phase 2 & 3.5."""
 
     def __init__(self, document: ReadableDocument, policy: Optional[ReadingPolicy] = None):
         self.document = document
@@ -112,7 +117,16 @@ class ReadingSession:
     def can_skip_prev(self) -> bool:
         return self.position.block_index > 0
 
+    def advance_next(self) -> Optional[DocumentBlock]:
+        """Advances naturally to the next block without invalidating the generation token."""
+        if self.can_skip_next():
+            self.position.block_index += 1
+            self.position.sentence_index = 0
+            return self.current_block
+        return None
+
     def skip_next(self) -> Optional[DocumentBlock]:
+        """Manual user skip to next block; increments generation token to invalidate background pre-fetches."""
         if self.can_skip_next():
             self.position.block_index += 1
             self.position.sentence_index = 0
@@ -121,6 +135,7 @@ class ReadingSession:
         return None
 
     def skip_prev(self) -> Optional[DocumentBlock]:
+        """Manual user skip to previous block; increments generation token."""
         if self.can_skip_prev():
             self.position.block_index -= 1
             self.position.sentence_index = 0
@@ -129,6 +144,7 @@ class ReadingSession:
         return None
 
     def seek_to_block(self, index: int) -> Optional[DocumentBlock]:
+        """Manual user seek to specific block index; increments generation token."""
         if 0 <= index < self.total_blocks:
             self.position.block_index = index
             self.position.sentence_index = 0

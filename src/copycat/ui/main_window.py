@@ -20,7 +20,7 @@ from copycat.domain.models import PlaybackState, DocumentBlock
 from copycat.services.settings_service import SettingsService, UserSettings
 
 class MainWindow(QMainWindow):
-    """Main application window featuring PySide6 UI controls, visual block highlighting, and navigation."""
+    """Main application window featuring PySide6 UI controls, visual block highlighting, and AI Mode selector."""
 
     AVAILABLE_VOICES = [
         ("Jenny (US Female)", "en-US-JennyNeural"),
@@ -40,6 +40,14 @@ class MainWindow(QMainWindow):
         ("+100%", "+100%"),
     ]
 
+    AVAILABLE_AI_MODES = [
+        ("Off (Natural)", "off"),
+        ("Code Explanation (Ollama)", "code_summary"),
+        ("Data & Table Summary (Ollama)", "data_summary"),
+        ("Section Gist (Gemma 3)", "gist"),
+        ("Full Document Summary (Ollama)", "document_summary"),
+    ]
+
     def __init__(
         self,
         controller: MainController,
@@ -52,13 +60,14 @@ class MainWindow(QMainWindow):
 
         self.highlighted_block_index: int = -1
 
-        self.setWindowTitle("Copy Cat — Auditory Document Reader")
-        self.resize(720, 520)
+        self.setWindowTitle("Copy Cat — Auditory Document Reader (Phase 3.5 AI)")
+        self.resize(780, 540)
 
         self._setup_ui()
         self._load_saved_settings()
         self._connect_signals()
         self._setup_shortcuts()
+        self._check_ollama_health()
 
     def _setup_ui(self) -> None:
         central_widget = QWidget(self)
@@ -66,7 +75,7 @@ class MainWindow(QMainWindow):
 
         layout = QVBoxLayout(central_widget)
 
-        # Settings & Controls bar
+        # Configuration Bar (Row 1)
         controls_layout = QHBoxLayout()
 
         controls_layout.addWidget(QLabel("Voice:"))
@@ -81,14 +90,20 @@ class MainWindow(QMainWindow):
             self.rate_combo.addItem(label, val)
         controls_layout.addWidget(self.rate_combo)
 
+        controls_layout.addWidget(QLabel("AI Mode:"))
+        self.ai_mode_combo = QComboBox()
+        for label, val in self.AVAILABLE_AI_MODES:
+            self.ai_mode_combo.addItem(label, val)
+        controls_layout.addWidget(self.ai_mode_combo)
+
         layout.addLayout(controls_layout)
 
-        # Main text preview editor using QPlainTextEdit for performant highlighting
+        # Main text preview editor using QPlainTextEdit
         self.text_edit = QPlainTextEdit()
         self.text_edit.setPlaceholderText("Paste Markdown text here or click 'Read Clipboard'...")
         layout.addWidget(self.text_edit)
 
-        # Playback Action Buttons Layout
+        # Playback Action Buttons Layout (Row 2)
         action_layout = QHBoxLayout()
 
         self.read_clipboard_button = QPushButton("📋 Read Clipboard")
@@ -117,6 +132,10 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel("Ready")
         self.status_bar.addWidget(self.status_label)
 
+        # Permanent Ollama Status Widget
+        self.ollama_status_label = QLabel("⚪ Ollama: Checking...")
+        self.status_bar.addPermanentWidget(self.ollama_status_label)
+
     def _setup_shortcuts(self) -> None:
         self.shortcut_prev = QShortcut(QKeySequence("Alt+Up"), self)
         self.shortcut_prev.activated.connect(self._on_prev_clicked)
@@ -134,10 +153,15 @@ class MainWindow(QMainWindow):
         if rate_idx >= 0:
             self.rate_combo.setCurrentIndex(rate_idx)
 
+        ai_idx = self.ai_mode_combo.findData(saved.ai_mode)
+        if ai_idx >= 0:
+            self.ai_mode_combo.setCurrentIndex(ai_idx)
+
     def _save_current_settings(self) -> None:
         new_settings = UserSettings(
             voice=self.get_selected_voice(),
             rate=self.get_selected_rate(),
+            ai_mode=self.get_selected_ai_mode(),
         )
         self.settings_service.save_settings(new_settings)
 
@@ -146,6 +170,9 @@ class MainWindow(QMainWindow):
 
     def get_selected_rate(self) -> str:
         return self.rate_combo.currentData() or "+0%"
+
+    def get_selected_ai_mode(self) -> str:
+        return self.ai_mode_combo.currentData() or "off"
 
     def _connect_signals(self) -> None:
         self.read_button.clicked.connect(self._on_read_text_clicked)
@@ -157,24 +184,60 @@ class MainWindow(QMainWindow):
 
         self.voice_combo.currentIndexChanged.connect(self._save_current_settings)
         self.rate_combo.currentIndexChanged.connect(self._save_current_settings)
+        self.ai_mode_combo.currentIndexChanged.connect(self._on_ai_mode_changed)
 
         self.controller.state_changed.connect(self._on_state_changed)
         self.controller.status_message_changed.connect(self.status_label.setText)
         self.controller.block_changed.connect(self._on_block_changed)
+        self.controller.transforming_block.connect(self._on_transforming_block)
         self.controller.boundary_reached.connect(self._on_boundary_reached)
+
+    @Slot()
+    @qasync.asyncSlot()
+    async def _check_ollama_health(self) -> None:
+        mode = self.get_selected_ai_mode()
+        
+        healthy = False
+        if self.controller.transformer and hasattr(self.controller.transformer, "check_health"):
+            healthy = await self.controller.transformer.check_health()
+
+        if mode == "off":
+            if healthy:
+                self.ollama_status_label.setText("⚪ AI Mode: Off (Ollama Standby)")
+            else:
+                self.ollama_status_label.setText("⚪ AI Mode: Off")
+        else:
+            if healthy:
+                self.ollama_status_label.setText("🟢 Ollama: Ready (gemma3:12b)")
+            else:
+                self.ollama_status_label.setText("🔴 Ollama: Offline (http://127.0.0.1:11434)")
+
+    @Slot()
+    def _on_ai_mode_changed(self) -> None:
+        self._save_current_settings()
+        self._check_ollama_health()
 
     @Slot()
     @qasync.asyncSlot()
     async def _on_read_text_clicked(self) -> None:
         text = self.text_edit.toPlainText()
         self._save_current_settings()
-        await self.controller.read_text(text, voice=self.get_selected_voice(), rate=self.get_selected_rate())
+        await self.controller.read_text(
+            text,
+            voice=self.get_selected_voice(),
+            rate=self.get_selected_rate(),
+            ai_mode=self.get_selected_ai_mode(),
+        )
 
     @Slot()
     @qasync.asyncSlot()
     async def _on_read_clipboard_clicked(self) -> None:
         self._save_current_settings()
-        await self.controller.read_clipboard(voice=self.get_selected_voice(), rate=self.get_selected_rate())
+        await self.controller.read_clipboard(
+            voice=self.get_selected_voice(),
+            rate=self.get_selected_rate(),
+            ai_mode=self.get_selected_ai_mode(),
+        )
 
     @Slot()
     def _on_pause_clicked(self) -> None:
@@ -198,13 +261,23 @@ class MainWindow(QMainWindow):
         self.controller.stop()
         self.clear_highlight()
 
+    @Slot(int)
+    def _on_transforming_block(self, current_1idx: int) -> None:
+        """Visual highlight during LLM transformation phase in Soft Purple (#E1D5E7)."""
+        self.ollama_status_label.setText("🟡 Ollama: Transforming block...")
+        if self.controller.current_document and 0 <= current_1idx - 1 < len(self.controller.current_document.blocks):
+            block = self.controller.current_document.blocks[current_1idx - 1]
+            if block.source_start is not None and block.source_end is not None:
+                self.highlight_range(block.source_start, block.source_end, color="#E1D5E7")
+
     @Slot(int, int, object)
     def _on_block_changed(self, current_1idx: int, total: int, block: DocumentBlock) -> None:
+        """Visual highlight during TTS playback phase in Soft Blue (#D1E9FF)."""
         self.highlighted_block_index = current_1idx - 1
         if block and block.source_start is not None and block.source_end is not None:
-            self.highlight_range(block.source_start, block.source_end)
+            self.highlight_range(block.source_start, block.source_end, color="#D1E9FF")
 
-    def highlight_range(self, start: int, end: int) -> None:
+    def highlight_range(self, start: int, end: int, color: str = "#D1E9FF") -> None:
         """Highlights character range [start, end] in the editor using QTextEdit.ExtraSelection."""
         doc = self.text_edit.document()
         if start < 0 or end > doc.characterCount():
@@ -218,7 +291,7 @@ class MainWindow(QMainWindow):
         selection.cursor = cursor
 
         fmt = QTextCharFormat()
-        fmt.setBackground(QColor("#D1E9FF"))  # Soft highlight blue
+        fmt.setBackground(QColor(color))
         selection.format = fmt
 
         self.text_edit.setExtraSelections([selection])
@@ -248,3 +321,10 @@ class MainWindow(QMainWindow):
 
         if state == PlaybackState.IDLE:
             self.clear_highlight()
+            self._check_ollama_health()
+        elif state == PlaybackState.PLAYING:
+            self._check_ollama_health()
+            if self.controller.current_document and 0 <= self.highlighted_block_index < len(self.controller.current_document.blocks):
+                block = self.controller.current_document.blocks[self.highlighted_block_index]
+                if block.source_start is not None and block.source_end is not None:
+                    self.highlight_range(block.source_start, block.source_end, color="#D1E9FF")

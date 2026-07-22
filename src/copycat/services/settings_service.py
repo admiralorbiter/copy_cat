@@ -1,9 +1,11 @@
-import os
 import json
+import logging
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional
 from platformdirs import user_config_dir
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class UserSettings:
@@ -11,24 +13,21 @@ class UserSettings:
     rate: str = "+0%"
     code_mode: str = "announce_and_skip"
     link_mode: str = "text_only_clean"
-
-AVAILABLE_VOICES = [
-    ("en-US-JennyNeural", "English (US) - Jenny (Female)"),
-    ("en-US-GuyNeural", "English (US) - Guy (Male)"),
-    ("en-US-AriaNeural", "English (US) - Aria (Female)"),
-    ("en-GB-SoniaNeural", "English (UK) - Sonia (Female)"),
-    ("en-AU-Neural", "English (AU) - Natascha (Female)"),
-]
-
-AVAILABLE_RATES = ["-50%", "-25%", "+0%", "+25%", "+50%", "+75%", "+100%"]
+    # Phase 3.5 AI Transformation Settings
+    ai_mode: str = "off"                      # "off", "code_summary", "data_summary", "gist"
+    ollama_host: str = "http://localhost:11434"
+    ollama_model: str = "gemma3:12b"
+    ollama_timeout: float = 3.0
 
 class SettingsService:
-    """Manages user settings persistence via platformdirs JSON file storage."""
+    """Manages application settings persistence via platformdirs JSON storage."""
 
     def __init__(self, config_dir: Optional[Path] = None):
-        if config_dir is None:
-            config_dir = Path(user_config_dir("copy_cat", appauthor=False))
-        self.config_dir = config_dir
+        if config_dir:
+            self.config_dir = Path(config_dir)
+        else:
+            self.config_dir = Path(user_config_dir("copy_cat", appauthor=False))
+
         self.config_file = self.config_dir / "settings.json"
         self.settings = self.load_settings()
 
@@ -37,23 +36,23 @@ class SettingsService:
             return UserSettings()
 
         try:
-            with open(self.config_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return UserSettings(
-                voice=data.get("voice", "en-US-JennyNeural"),
-                rate=data.get("rate", "+0%"),
-                code_mode=data.get("code_mode", "announce_and_skip"),
-                link_mode=data.get("link_mode", "text_only_clean"),
-            )
-        except Exception:
+            content = self.config_file.read_text(encoding="utf-8")
+            data = json.loads(content)
+            # Filter only valid UserSettings fields
+            valid_keys = {f for f in UserSettings.__dataclass_fields__}
+            filtered_data = {k: v for k, v in data.items() if k in valid_keys}
+            return UserSettings(**filtered_data)
+        except Exception as err:
+            logger.warning(f"Failed to load settings file ({err}); using default settings.")
             return UserSettings()
 
     def save_settings(self, settings: UserSettings) -> None:
         self.settings = settings
-        self.config_dir.mkdir(parents=True, exist_ok=True)
-        temp_file = self.config_file.with_suffix(".tmp")
-
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(asdict(settings), f, indent=2)
-
-        os.replace(temp_file, self.config_file)
+        try:
+            self.config_dir.mkdir(parents=True, exist_ok=True)
+            temp_file = self.config_file.with_suffix(".tmp")
+            data = asdict(settings)
+            temp_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            temp_file.replace(self.config_file)
+        except Exception as err:
+            logger.error(f"Failed to save settings file: {err}")
