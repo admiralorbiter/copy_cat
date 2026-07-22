@@ -5,6 +5,8 @@ from copycat.domain.models import (
     SourceSnapshot,
     DocumentBlock,
     ReadableDocument,
+    ReadingPosition,
+    ReadingSession,
     SpeechRequest,
     AudioChunk,
 )
@@ -16,6 +18,8 @@ __all__ = [
     "SourceSnapshot",
     "DocumentBlock",
     "ReadableDocument",
+    "ReadingPosition",
+    "ReadingSession",
     "SpeechRequest",
     "AudioChunk",
 ]

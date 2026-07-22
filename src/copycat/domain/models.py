@@ -33,7 +33,9 @@ class ReadingPolicy:
     verbosity: str = "natural"
     code_mode: str = "announce_and_skip"  # "announce_and_skip", "read_all", "omit"
     link_mode: str = "text_only_clean"    # "text_only_clean", "text_with_announcement", "omit"
+    table_mode: str = "summary"
     announce_heading_levels: bool = False
+    repeat_context_on_resume: bool = True
 
 @dataclass(frozen=True)
 class SourceSnapshot:
@@ -63,6 +65,12 @@ class ReadableDocument:
     outline: List[str] = field(default_factory=list)
 
 @dataclass
+class ReadingPosition:
+    block_index: int = 0
+    sentence_index: int = 0
+    heading_path: List[str] = field(default_factory=list)
+
+@dataclass
 class SpeechRequest:
     request_id: str
     text: str
@@ -78,3 +86,52 @@ class AudioChunk:
     format: str = "mp3"
     duration_ms: int = 0
     block_id: str = "block-0"
+
+class ReadingSession:
+    """Encapsulates document state, semantic reading cursor, and generation token for Phase 2."""
+
+    def __init__(self, document: ReadableDocument, policy: Optional[ReadingPolicy] = None):
+        self.document = document
+        self.policy = policy or ReadingPolicy()
+        self.position = ReadingPosition()
+        self.generation: int = 0
+
+    @property
+    def current_block(self) -> Optional[DocumentBlock]:
+        if 0 <= self.position.block_index < len(self.document.blocks):
+            return self.document.blocks[self.position.block_index]
+        return None
+
+    @property
+    def total_blocks(self) -> int:
+        return len(self.document.blocks)
+
+    def can_skip_next(self) -> bool:
+        return self.position.block_index + 1 < self.total_blocks
+
+    def can_skip_prev(self) -> bool:
+        return self.position.block_index > 0
+
+    def skip_next(self) -> Optional[DocumentBlock]:
+        if self.can_skip_next():
+            self.position.block_index += 1
+            self.position.sentence_index = 0
+            self.generation += 1
+            return self.current_block
+        return None
+
+    def skip_prev(self) -> Optional[DocumentBlock]:
+        if self.can_skip_prev():
+            self.position.block_index -= 1
+            self.position.sentence_index = 0
+            self.generation += 1
+            return self.current_block
+        return None
+
+    def seek_to_block(self, index: int) -> Optional[DocumentBlock]:
+        if 0 <= index < self.total_blocks:
+            self.position.block_index = index
+            self.position.sentence_index = 0
+            self.generation += 1
+            return self.current_block
+        return None

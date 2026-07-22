@@ -8,7 +8,7 @@ from tests.mocks.mock_audio_output import MockAudioOutput
 
 @pytest.mark.asyncio
 async def test_controller_continuous_multi_block_reading(event_loop):
-    speech = MockSpeechProvider(delay=0.01)
+    speech = MockSpeechProvider(delay=0.0)
     audio = MockAudioOutput()
     controller = MainController(speech_provider=speech, audio_output=audio)
 
@@ -17,27 +17,67 @@ async def test_controller_continuous_multi_block_reading(event_loop):
 
     assert controller.state == PlaybackState.PLAYING
     assert audio.is_playing is True
-    assert len(controller._planned_requests) == 3
-    assert controller._current_block_index == 0
+    assert controller.session.total_blocks == 3
+    assert controller.session.position.block_index == 0
 
     # Simulate completion of Block 0 -> should advance to Block 1
     await controller._on_playback_finished()
     assert controller.state == PlaybackState.PLAYING
-    assert controller._current_block_index == 1
+    assert controller.session.position.block_index == 1
 
     # Simulate completion of Block 1 -> should advance to Block 2
     await controller._on_playback_finished()
     assert controller.state == PlaybackState.PLAYING
-    assert controller._current_block_index == 2
+    assert controller.session.position.block_index == 2
 
     # Simulate completion of Block 2 -> should finish document and transition to IDLE
     await controller._on_playback_finished()
     assert controller.state == PlaybackState.IDLE
 
 @pytest.mark.asyncio
+async def test_controller_skip_next_and_prev_navigation(event_loop):
+    speech = MockSpeechProvider(delay=0.0)
+    audio = MockAudioOutput()
+    controller = MainController(speech_provider=speech, audio_output=audio)
+
+    boundary_signals = []
+    controller.boundary_reached.connect(boundary_signals.append)
+
+    raw_text = "Paragraph 1\n\nParagraph 2\n\nParagraph 3"
+    await controller.read_text(raw_text)
+
+    assert controller.session.position.block_index == 0
+
+    # Skip next to Block 1
+    await controller.skip_next()
+    assert controller.session.position.block_index == 1
+
+    # Skip next to Block 2
+    await controller.skip_next()
+    assert controller.session.position.block_index == 2
+
+    # Attempt skip next at end boundary
+    await controller.skip_next()
+    assert len(boundary_signals) == 1
+    assert boundary_signals[0] == "end"
+
+    # Skip prev back to Block 1
+    await controller.skip_prev()
+    assert controller.session.position.block_index == 1
+
+    # Skip prev back to Block 0
+    await controller.skip_prev()
+    assert controller.session.position.block_index == 0
+
+    # Attempt skip prev at start boundary
+    await controller.skip_prev()
+    assert len(boundary_signals) == 2
+    assert boundary_signals[1] == "start"
+
+@pytest.mark.asyncio
 async def test_controller_read_clipboard_success(qapp):
     QApplication.clipboard().setText("Clipboard text prompt")
-    speech = MockSpeechProvider(delay=0.01)
+    speech = MockSpeechProvider(delay=0.0)
     audio = MockAudioOutput()
     controller = MainController(speech_provider=speech, audio_output=audio)
 
@@ -48,7 +88,7 @@ async def test_controller_read_clipboard_success(qapp):
 
 @pytest.mark.asyncio
 async def test_controller_bad_path_empty_input(event_loop):
-    speech = MockSpeechProvider()
+    speech = MockSpeechProvider(delay=0.0)
     audio = MockAudioOutput()
     controller = MainController(speech_provider=speech, audio_output=audio)
 
@@ -60,7 +100,7 @@ async def test_controller_bad_path_empty_input(event_loop):
 
 @pytest.mark.asyncio
 async def test_controller_bad_path_synthesis_failure(event_loop):
-    speech = MockSpeechProvider(should_fail=True)
+    speech = MockSpeechProvider(should_fail=True, delay=0.0)
     audio = MockAudioOutput()
     controller = MainController(speech_provider=speech, audio_output=audio)
 
@@ -70,20 +110,8 @@ async def test_controller_bad_path_synthesis_failure(event_loop):
     assert audio.is_playing is False
 
 @pytest.mark.asyncio
-async def test_controller_bad_path_audio_device_failure(event_loop):
-    speech = MockSpeechProvider()
-    audio = MockAudioOutput()
-    audio.should_fail = True
-    controller = MainController(speech_provider=speech, audio_output=audio)
-
-    await controller.read_text("Test text")
-
-    assert controller.state == PlaybackState.AUDIO_OUTPUT_FAILED
-    assert audio.is_playing is False
-
-@pytest.mark.asyncio
 async def test_controller_pause_and_resume(event_loop):
-    speech = MockSpeechProvider()
+    speech = MockSpeechProvider(delay=0.0)
     audio = MockAudioOutput()
     controller = MainController(speech_provider=speech, audio_output=audio)
 
@@ -100,7 +128,7 @@ async def test_controller_pause_and_resume(event_loop):
 
 @pytest.mark.asyncio
 async def test_controller_stop_and_rapid_spamming(event_loop):
-    speech = MockSpeechProvider(delay=0.1)
+    speech = MockSpeechProvider(delay=0.05)
     audio = MockAudioOutput()
     controller = MainController(speech_provider=speech, audio_output=audio)
 

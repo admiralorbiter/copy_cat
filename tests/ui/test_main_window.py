@@ -43,6 +43,29 @@ async def test_main_window_read_and_stop_buttons(qtbot, tmp_path):
     assert audio.is_playing is False
 
 @pytest.mark.asyncio
+async def test_main_window_navigation_and_highlighting(qtbot, tmp_path):
+    speech = MockSpeechProvider(delay=0.0)
+    audio = MockAudioOutput()
+    controller = MainController(speech_provider=speech, audio_output=audio)
+    settings = SettingsService(config_dir=tmp_path)
+    window = MainWindow(controller=controller, settings_service=settings)
+    qtbot.addWidget(window)
+
+    text = "First paragraph block.\n\nSecond paragraph block."
+    window.text_edit.setPlainText(text)
+
+    await window.controller.read_text(text)
+    assert window.highlighted_block_index == 0
+
+    # Trigger Next block
+    await window.controller.skip_next()
+    assert window.highlighted_block_index == 1
+
+    # Trigger Prev block
+    await window.controller.skip_prev()
+    assert window.highlighted_block_index == 0
+
+@pytest.mark.asyncio
 async def test_main_window_read_clipboard(qtbot, tmp_path):
     QApplication.clipboard().setText("Clipboard content for UI test")
 

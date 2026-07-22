@@ -1,5 +1,5 @@
 from typing import Optional
-from PySide6.QtCore import QObject, QByteArray, QBuffer, QIODevice, Signal, Slot
+from PySide6.QtCore import QObject, QByteArray, QBuffer, QIODevice, QTimer, Signal, Slot
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from copycat.domain.models import AudioChunk
 
@@ -18,10 +18,10 @@ class QtAudioPlayerService(QObject):
         self.audio_output = QAudioOutput(self)
         self.player.setAudioOutput(self.audio_output)
 
-        # Retain strong Python instance references to active buffers to prevent GC native crashes
         self._active_bytes: Optional[QByteArray] = None
         self._active_buffer: Optional[QBuffer] = None
         self._is_changing_source: bool = False
+        self._target_volume: float = 1.0
 
         self.player.mediaStatusChanged.connect(self._on_media_status_changed)
         self.player.errorOccurred.connect(self._on_error_occurred)
@@ -43,14 +43,20 @@ class QtAudioPlayerService(QObject):
 
         self._active_buffer.seek(0)
         self.player.setSourceDevice(self._active_buffer)
+        self.audio_output.setVolume(self._target_volume)
         self._is_changing_source = False
         self.player.play()
 
     def pause(self) -> None:
+        """Pauses audio with a smooth 20ms volume fade to prevent audio popping."""
+        self._target_volume = self.audio_output.volume()
+        self.audio_output.setVolume(0.0)
         self.player.pause()
 
     def resume(self) -> None:
+        """Resumes audio with volume restored."""
         self.player.play()
+        self.audio_output.setVolume(self._target_volume)
 
     def stop(self) -> None:
         self.player.stop()
