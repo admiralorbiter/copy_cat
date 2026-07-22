@@ -21,6 +21,11 @@ Copy Cat follows a modular, decoupled architecture where text acquisition, docum
             |
             v
 +-----------------------+
+| Document Transformer  |  (Optional Ollama / Gemma 3 12B Spoken AI Transformations)
++-----------------------+
+            |
+            v
++-----------------------+
 |   Auditory Document   |  (Structured blocks, outline, semantic IDs)
 +-----------------------+
             |
@@ -180,6 +185,24 @@ class AudioChunk:
 
 class SpeechProvider(Protocol):
     async def synthesize(self, request: SpeechRequest) -> AudioChunk: ...
+
+class DocumentTransformer(Protocol):
+    """Optional transformation provider interface for AI-assisted auditory transformations."""
+    async def transform_block(self, block: DocumentBlock, mode: str) -> str: ...
+
+class OllamaTransformer:
+    """Local LLM transformer using Ollama (default model: Gemma 3 12B).
+    
+    Endpoint: http://localhost:11434/api/generate
+    Modes:
+    - "code_summary": Converts raw code blocks into plain spoken English explanations.
+    - "data_summary": Summarizes dense tables/numeric matrices into natural narrative prose.
+    - "gist": Condenses long 500-word paragraphs into crisp 1-2 sentence auditory summaries.
+    """
+    def __init__(self, endpoint: str = "http://localhost:11434", model: str = "gemma3:12b", timeout: float = 3.0):
+        self.endpoint = endpoint
+        self.model = model
+        self.timeout = timeout
 
 class AudioOutput(Protocol):
     def play(self, chunk: AudioChunk) -> None: ...

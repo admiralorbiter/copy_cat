@@ -1,8 +1,7 @@
-from typing import Protocol
-from copycat.domain.models import AudioChunk
+from typing import Protocol, Callable
 
 class AudioOutput(Protocol):
-    def play(self, chunk: AudioChunk) -> None:
+    def play(self, chunk: "AudioChunk") -> None:
         ...
 
     def pause(self) -> None:

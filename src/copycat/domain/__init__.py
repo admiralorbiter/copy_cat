@@ -1,6 +1,7 @@
 from copycat.domain.models import (
     BlockType,
     PlaybackState,
+    ReadingPolicy,
     SourceSnapshot,
     DocumentBlock,
     ReadableDocument,
@@ -11,6 +12,7 @@ from copycat.domain.models import (
 __all__ = [
     "BlockType",
     "PlaybackState",
+    "ReadingPolicy",
     "SourceSnapshot",
     "DocumentBlock",
     "ReadableDocument",

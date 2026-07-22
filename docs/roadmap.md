@@ -61,6 +61,23 @@ Enable rapid skimming and structural navigation of long documents.
 
 ---
 
+## Phase 3.5: AI Spoken Summarization Engine (Ollama & Gemma 3 12B)
+
+### Objectives
+Integrate local LLM transformation via Ollama to summarize dense paragraphs, code blocks, and numeric data into spoken narrative.
+
+### Key Deliverables
+- `DocumentTransformer` protocol and `OllamaTransformer` adapter service (`http://localhost:11434`, default model `gemma3:12b`).
+- AI Reading Modes:
+  - **Code Explanation**: Replaces raw code blocks with plain English explanations (e.g. *"Python script that fetches API data and logs errors"*).
+  - **Data & Table Summary**: Converts complex tables/matrices into narrative spoken summaries.
+  - **Section Gist**: Condenses long 500-word paragraphs into 1–2 sentence auditory summaries.
+- Auditory Source Attribution (subtle spoken prefixes like *"AI summary: ..."*).
+- Fallback Resilience: Automatic fallback to deterministic reading if Ollama is offline or times out.
+- Unit and integration test suite with mocked Ollama API server (`>=80%` test coverage).
+
+---
+
 ## Phase 4: Convenience & Desktop Integration
 
 ### Objectives

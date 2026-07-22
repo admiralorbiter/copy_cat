@@ -28,6 +28,13 @@ class PlaybackState(Enum):
     SYNTHESIS_FAILED = "synthesis_failed"
     AUDIO_OUTPUT_FAILED = "audio_output_failed"
 
+@dataclass
+class ReadingPolicy:
+    verbosity: str = "natural"
+    code_mode: str = "announce_and_skip"  # "announce_and_skip", "read_all", "omit"
+    link_mode: str = "text_only_clean"    # "text_only_clean", "text_with_announcement", "omit"
+    announce_heading_levels: bool = False
+
 @dataclass(frozen=True)
 class SourceSnapshot:
     raw_text: str

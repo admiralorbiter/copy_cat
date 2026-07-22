@@ -34,11 +34,16 @@ Copy Cat is an **eyes-reduced document reader** sitting between a simple read-al
 - Provide playback controls: Play, Pause, Stop, Next Block, Previous Block.
 - Configurable voice, speech rate, code handling, and link policies.
 
+### Extended Scope (Phase 3.5 AI Summarization)
+- Optional local LLM transformation via Ollama (`gemma3:12b` model at `http://localhost:11434`).
+- AI Spoken Modes: Code Explanations, Data & Table Summarization, and Section Gist.
+- Automatic fallback to deterministic reading if Ollama is offline.
+
 ### Explicit Non-Goals (First Versions)
 - Fully replacing screen readers like NVDA or Narrator.
 - Token-by-token streaming AI reading during generation.
 - OCR text extraction.
-- Automatic LLM summarization (unless explicitly selected in later advanced modes).
+- Cloud-only paid LLM dependencies (privacy-first local Ollama is preferred).
 - Full hands-free voice control.
 - Cross-platform support (Windows-first target).
 
@@ -78,3 +83,4 @@ Copy Cat is an **eyes-reduced document reader** sitting between a simple read-al
 | **TTS Engine** | Edge TTS (`edge-tts`) | Natural Microsoft Edge neural voices without API keys. Pluggable `SpeechProvider` interface. |
 | **Markdown Parsing** | `markdown-it-py` | AST-based robust parsing for headings, lists, code fences, and links. |
 | **Input Source** | Windows Clipboard (`QClipboard`) | Simple, reliable, application-agnostic baseline capture. |
+| **Local LLM Engine** | Ollama (`gemma3:12b`) | Privacy-first local AI transformation for code explanations, table summaries, and section gists. |

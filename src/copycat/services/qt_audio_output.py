@@ -21,6 +21,7 @@ class QtAudioPlayerService(QObject):
         # Retain strong Python instance references to active buffers to prevent GC native crashes
         self._active_bytes: Optional[QByteArray] = None
         self._active_buffer: Optional[QBuffer] = None
+        self._is_changing_source: bool = False
 
         self.player.mediaStatusChanged.connect(self._on_media_status_changed)
         self.player.errorOccurred.connect(self._on_error_occurred)
@@ -30,16 +31,19 @@ class QtAudioPlayerService(QObject):
             self.playback_error.emit("Cannot play empty audio chunk.")
             return
 
+        self._is_changing_source = True
         self.stop()
 
         self._active_bytes = QByteArray(chunk.audio_bytes)
         self._active_buffer = QBuffer(self._active_bytes, self)
         if not self._active_buffer.open(QIODevice.ReadOnly):
             self.playback_error.emit("Failed to open QBuffer for audio playback.")
+            self._is_changing_source = False
             return
 
         self._active_buffer.seek(0)
         self.player.setSourceDevice(self._active_buffer)
+        self._is_changing_source = False
         self.player.play()
 
     def pause(self) -> None:
@@ -58,7 +62,7 @@ class QtAudioPlayerService(QObject):
 
     @Slot(QMediaPlayer.MediaStatus)
     def _on_media_status_changed(self, status: QMediaPlayer.MediaStatus) -> None:
-        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+        if status == QMediaPlayer.MediaStatus.EndOfMedia and not self._is_changing_source:
             self.playback_finished.emit()
 
     @Slot(QMediaPlayer.Error, str)

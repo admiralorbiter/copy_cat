@@ -1,25 +1,50 @@
 import pytest
 import asyncio
+from PySide6.QtWidgets import QApplication
 from copycat.controller.main_controller import MainController
 from copycat.domain.models import PlaybackState
 from tests.mocks.mock_speech_provider import MockSpeechProvider
 from tests.mocks.mock_audio_output import MockAudioOutput
 
 @pytest.mark.asyncio
-async def test_controller_happy_path(event_loop):
+async def test_controller_continuous_multi_block_reading(event_loop):
     speech = MockSpeechProvider(delay=0.01)
     audio = MockAudioOutput()
     controller = MainController(speech_provider=speech, audio_output=audio)
 
-    assert controller.state == PlaybackState.IDLE
-
-    await controller.read_text("Valid test prompt for synthesis.")
+    raw_text = "# Block 1 Header\n\nParagraph block 2 text.\n\nParagraph block 3 text."
+    await controller.read_text(raw_text)
 
     assert controller.state == PlaybackState.PLAYING
     assert audio.is_playing is True
-    assert audio.current_chunk is not None
-    assert len(speech.calls) == 1
-    assert speech.calls[0].text == "Valid test prompt for synthesis."
+    assert len(controller._planned_requests) == 3
+    assert controller._current_block_index == 0
+
+    # Simulate completion of Block 0 -> should advance to Block 1
+    await controller._on_playback_finished()
+    assert controller.state == PlaybackState.PLAYING
+    assert controller._current_block_index == 1
+
+    # Simulate completion of Block 1 -> should advance to Block 2
+    await controller._on_playback_finished()
+    assert controller.state == PlaybackState.PLAYING
+    assert controller._current_block_index == 2
+
+    # Simulate completion of Block 2 -> should finish document and transition to IDLE
+    await controller._on_playback_finished()
+    assert controller.state == PlaybackState.IDLE
+
+@pytest.mark.asyncio
+async def test_controller_read_clipboard_success(qapp):
+    QApplication.clipboard().setText("Clipboard text prompt")
+    speech = MockSpeechProvider(delay=0.01)
+    audio = MockAudioOutput()
+    controller = MainController(speech_provider=speech, audio_output=audio)
+
+    await controller.read_clipboard()
+
+    assert controller.state == PlaybackState.PLAYING
+    assert audio.is_playing is True
 
 @pytest.mark.asyncio
 async def test_controller_bad_path_empty_input(event_loop):
@@ -83,7 +108,7 @@ async def test_controller_stop_and_rapid_spamming(event_loop):
     task = asyncio.create_task(controller.read_text("Rapid stop test text"))
     await asyncio.sleep(0.01)
 
-    assert controller.state == PlaybackState.BUFFERING
+    assert controller.state in (PlaybackState.PARSING, PlaybackState.BUFFERING)
 
     # Rapidly call stop 5 times
     for _ in range(5):
@@ -92,5 +117,5 @@ async def test_controller_stop_and_rapid_spamming(event_loop):
     assert controller.state == PlaybackState.IDLE
     assert audio.is_playing is False
 
-    await task  # Wait for task completion after cancellation
+    await task
     assert controller.state == PlaybackState.IDLE
